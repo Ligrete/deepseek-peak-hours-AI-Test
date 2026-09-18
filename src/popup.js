@@ -1,17 +1,20 @@
-/** Popup: живой статус, обратный отсчёт, таймлайн суток, расписание и цены. */
+/** Popup: статус, обратный отсчёт, таймлайн суток, расписание, цены и источник данных. */
 
 import {
-  PRICES,
-  SCHEDULE,
   currentPeakWindow,
+  getPrices,
+  getSchedule,
   localDayHourStatuses,
   localTimezone,
   nextTransition,
   status,
   weeklyLocalSchedule,
 } from './schedule.js';
+import { describeDataState, loadStoredPricing, readStoredPricing } from './schedule-update.js';
 
 const LOCALE = 'ru-RU';
+/** Тик раз в 30 секунд: отсчёт идёт в минутах, секунды не нужны (и не грузят CPU). */
+const TICK_MS = 30000;
 const $ = (selector) => document.querySelector(selector);
 
 const tzId = localTimezone();
@@ -28,22 +31,18 @@ function time(date) {
   return date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 }
 
-function clock(date) {
-  return date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
 function utcTime(date) {
   return `${date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC`;
 }
 
+/** Отсчёт в минутах: без секунд, чтобы popup не перерисовывался каждую секунду. */
 function humanLeft(ms) {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  if (hours > 0) return `${hours} ч ${String(minutes).padStart(2, '0')} мин`;
-  if (minutes > 0) return `${minutes} мин ${String(seconds).padStart(2, '0')} с`;
-  return `${seconds} с`;
+  const totalMinutes = Math.max(0, Math.ceil(ms / 60000));
+  if (totalMinutes < 1) return 'меньше минуты';
+  if (totalMinutes < 60) return `${totalMinutes} мин`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours} ч ${minutes} мин` : `${hours} ч`;
 }
 
 function money(value) {
@@ -104,8 +103,9 @@ function buildWeek() {
 }
 
 function buildPrices() {
+  const prices = getPrices();
   const rows = [];
-  for (const model of PRICES) {
+  for (const model of prices) {
     rows.push(
       `<tr class="model-row"><td colspan="3">${model.name}</td></tr>`,
       ...model.metrics.map(
@@ -117,15 +117,25 @@ function buildPrices() {
   $('#prices').innerHTML = `<table><thead><tr><th>Метрика</th><th>Офф-пик</th><th>Пик</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
 }
 
+async function renderDataSource() {
+  const stored = await readStoredPricing();
+  const state = describeDataState(stored, LOCALE);
+  const host = $('#data-source');
+  host.dataset.tone = state.tone;
+  host.textContent = state.text;
+  host.title = state.detail || '';
+}
+
 function renderStatic() {
   const now = new Date();
   const s = status(now);
+  const schedule = getSchedule();
   const next = nextTransition(now);
   const window_ = currentPeakWindow(now);
 
   document.body.dataset.status = s.peak ? 'peak' : 'off';
 
-  $('#status-title').textContent = s.peak ? 'ПИК — полная цена' : 'ОФФ-ПИК — скидка 50%';
+  $('#status-title').textContent = s.peak ? 'ПИК — полная цена' : `ОФФ-ПИК — скидка ${schedule.discountPercent}%`;
   $('#status-note').textContent = s.peak
     ? 'Сейчас дорогой тариф. Массовые задачи лучше отложить.'
     : 'Лучшее время для тяжёлых прогонов: цены вдвое ниже.';
@@ -156,14 +166,45 @@ function tick() {
     markCurrentHour();
   }
 
-  $('#local-clock').textContent = `${clock(now)} ${tzShort}`;
+  $('#local-clock').textContent = `${time(now)} ${tzShort}`;
   $('#utc-clock').textContent = utcTime(now);
   $('#countdown-value').textContent = next ? humanLeft(next.msLeft) : '—';
 }
 
-buildPrices();
-tick();
-setInterval(tick, 1000);
+async function onRefreshClick() {
+  const button = $('#refresh-data');
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = 'Обновляю…';
+  try {
+    const response = await globalThis.chrome?.runtime?.sendMessage?.({ type: 'refresh-pricing', force: true });
+    if (response?.status === 'updated') {
+      button.textContent = 'Обновлено';
+    } else {
+      button.textContent = 'Не удалось';
+    }
+  } catch {
+    button.textContent = 'Не удалось';
+  }
+  await renderDataSource();
+  renderStatic();
+  buildPrices();
+  setTimeout(() => {
+    button.textContent = original;
+    button.disabled = false;
+  }, 1500);
+}
 
-// Просим service worker обновить иконку сразу при открытии popup.
-Promise.resolve(globalThis.chrome?.runtime?.sendMessage?.({ type: 'refresh' })).catch(() => {});
+// Попап открывается на секунды — секундный тик здесь не нужен, хватает 30 с.
+async function init() {
+  await loadStoredPricing();
+  await renderDataSource();
+  buildPrices();
+  tick();
+  setInterval(tick, TICK_MS);
+  $('#refresh-data').addEventListener('click', onRefreshClick);
+  // Просим service worker обновить иконку сразу при открытии popup.
+  Promise.resolve(globalThis.chrome?.runtime?.sendMessage?.({ type: 'refresh' })).catch(() => {});
+}
+
+init().catch((error) => console.error('[DeepSeek Peak Hours] popup:', error));

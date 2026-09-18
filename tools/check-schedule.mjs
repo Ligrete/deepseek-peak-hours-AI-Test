@@ -4,10 +4,15 @@
  */
 
 import {
+  applyRemoteData,
   currentPeakWindow,
+  getDataOrigin,
+  getPrices,
+  getSchedule,
   isPeak,
   localDayHourStatuses,
   nextTransition,
+  resetToBundled,
   status,
   weeklyLocalSchedule,
 } from '../src/schedule.js';
@@ -124,6 +129,53 @@ if ((process.env.TZ || '') === 'Europe/Moscow') {
   );
 } else {
   console.log('  skip проверки локального времени (нужен TZ=Europe/Moscow)');
+}
+
+console.log('Переопределение данными со страницы тарифов:');
+{
+  const remote = {
+    peakWindowsUtc: [{ startMinute: 9 * 60, endMinute: 11 * 60 }],
+    peakWeekdaysUtc: [1, 2, 3, 4, 5],
+    discountPercent: 75,
+    sentence: '09:00 - 11:00 UTC, Monday through Friday (all other hours are off-peak)',
+  };
+
+  const applied = applyRemoteData({ schedule: remote, prices: null });
+  check('расписание применилось', applied.scheduleApplied, true);
+  check('источник стал remote', getDataOrigin(), 'remote');
+  check('окна заменились на новые', isPeak(utc('2026-09-18T09:30:00')), true);
+  check('старое окно больше не пик', isPeak(utc('2026-09-18T02:00:00')), false);
+  check('новая скидка 75% → множитель 0.25', status(utc('2026-09-18T12:00:00')).priceMultiplier, 0.25);
+  check('цитата со страницы сохранена', getSchedule().sentence, remote.sentence);
+  check('встроенные цены не тронуты (prices = null)', getPrices().length, 2);
+
+  const withPrices = applyRemoteData({
+    schedule: remote,
+    prices: [{ id: 'deepseek-flash', name: 'deepseek-flash', metrics: [{ id: 'output', name: 'Выход', offPeak: 0.1, peak: 0.4 }] }],
+  });
+  check('цены применились отдельно от расписания', withPrices.pricesApplied, true);
+  check('активные цены заменены', getPrices().length, 1);
+
+  check(
+    'битое расписание отбраковывается',
+    applyRemoteData({ schedule: { peakWindowsUtc: [], peakWeekdaysUtc: [1] } }).scheduleApplied,
+    false,
+  );
+  check('битые дни недели отбраковываются', applyRemoteData({ schedule: { peakWindowsUtc: [{ startMinute: 60, endMinute: 120 }], peakWeekdaysUtc: [9] } }).scheduleApplied, false);
+  check(
+    'битое расписание не откатывает уже применённые цены',
+    (() => {
+      const result = applyRemoteData({ schedule: { peakWindowsUtc: [] }, prices: null });
+      return [result.scheduleApplied, getSchedule().peakWindowsUtc.length];
+    })(),
+    [false, 1],
+  );
+  check('без скидки сохраняется встроенная (50%)', applyRemoteData({ schedule: { ...remote, discountPercent: null } }).scheduleApplied && getSchedule().discountPercent, 50);
+
+  resetToBundled();
+  check('сброс возвращает встроенные данные', getDataOrigin(), 'bundled');
+  check('и встроенные окна', isPeak(utc('2026-09-18T02:00:00')), true);
+  check('и встроенные цены', getPrices().length, 2);
 }
 
 console.log(`\n${checks - failures}/${checks} проверок пройдено`);

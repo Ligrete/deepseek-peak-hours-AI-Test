@@ -23,9 +23,14 @@ const errors = [];
 globalThis.console.info = (...args) => infos.push(args.join(' '));
 globalThis.console.error = (...args) => errors.push(args.join(' '));
 
-globalThis.fetch = async (url) => ({
-  blob: async () => ({ url }),
-});
+globalThis.fetch = async (url) => {
+  // Страница тарифов: отдаём валидный HTTP-ответ без расписания — это не должно
+  // мешать иконке (сбой обновления обрабатывается внутри и не пишет console.error).
+  if (String(url).includes('api-docs.deepseek.com')) {
+    return { ok: true, status: 200, text: async () => '<html><body>нет расписания</body></html>' };
+  }
+  return { blob: async () => ({ url }) };
+};
 globalThis.createImageBitmap = async () => ({ close() {} });
 globalThis.OffscreenCanvas = class {
   constructor(width, height) {
@@ -64,6 +69,12 @@ globalThis.chrome = {
     setBadgeTextColor: async () => {},
     setTitle: async (o) => {
       title = o.title;
+    },
+  },
+  storage: {
+    local: {
+      get: async () => ({}),
+      set: async () => {},
     },
   },
   runtime: {

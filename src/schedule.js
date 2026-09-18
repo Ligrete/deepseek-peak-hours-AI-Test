@@ -9,10 +9,12 @@
  * Внутри всё считается в UTC (так задано у DeepSeek). Часовой пояс пользователя
  * учитывается только при отображении — поэтому переход на летнее время не ломает логику.
  *
- * Если DeepSeek изменит расписание — правится только объект SCHEDULE ниже.
+ * Данные ниже — «встроенные» (BUNDLED_*). Раз в неделю расширение скачивает страницу
+ * тарифов и подменяет активные данные через applyRemoteData(); логика читает их через
+ * getSchedule()/getPrices(). Если разбор не удался — остаются встроенные значения.
  */
 
-export const SCHEDULE = {
+export const BUNDLED_SCHEDULE = {
   sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing',
   checkedAt: '2026-09-18',
   discountPercent: 50,
@@ -26,23 +28,23 @@ export const SCHEDULE = {
 };
 
 /** Цены за 1M токенов, USD. Источник — та же страница тарифов. */
-export const PRICES = [
+export const BUNDLED_PRICES = [
   {
     id: 'deepseek-flash',
     name: 'deepseek-flash',
     metrics: [
-      { name: 'Вход, кэш-хит', peak: 0.006, offPeak: 0.003 },
-      { name: 'Вход, кэш-мисс', peak: 0.3, offPeak: 0.15 },
-      { name: 'Выход', peak: 1.2, offPeak: 0.6 },
+      { id: 'cacheHit', name: 'Вход, кэш-хит', peak: 0.006, offPeak: 0.003 },
+      { id: 'cacheMiss', name: 'Вход, кэш-мисс', peak: 0.3, offPeak: 0.15 },
+      { id: 'output', name: 'Выход', peak: 1.2, offPeak: 0.6 },
     ],
   },
   {
     id: 'deepseek-v4-pro',
     name: 'deepseek-v4-pro',
     metrics: [
-      { name: 'Вход, кэш-хит', peak: 0.044, offPeak: 0.022 },
-      { name: 'Вход, кэш-мисс', peak: 1.32, offPeak: 0.66 },
-      { name: 'Выход', peak: 3.96, offPeak: 1.98 },
+      { id: 'cacheHit', name: 'Вход, кэш-хит', peak: 0.044, offPeak: 0.022 },
+      { id: 'cacheMiss', name: 'Вход, кэш-мисс', peak: 1.32, offPeak: 0.66 },
+      { id: 'output', name: 'Выход', peak: 3.96, offPeak: 1.98 },
     ],
   },
 ];
@@ -52,30 +54,112 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 /** Порядок дней недели для вывода: Пн … Вс. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
+const clone = (value) => JSON.parse(JSON.stringify(value));
+
+let activeSchedule = clone(BUNDLED_SCHEDULE);
+let activePrices = clone(BUNDLED_PRICES);
+let dataOrigin = 'bundled';
+
+/** Активное расписание: встроенное либо скачанное со страницы тарифов. */
+export function getSchedule() {
+  return activeSchedule;
+}
+
+/** Активные цены за 1M токенов. */
+export function getPrices() {
+  return activePrices;
+}
+
+/** 'bundled' — значения из этого файла, 'remote' — разобраны со страницы тарифов. */
+export function getDataOrigin() {
+  return dataOrigin;
+}
+
+/**
+ * Проверка правдоподобности расписания перед применением.
+ * Экспортируется, чтобы слой обновления мог отбраковать данные с понятной ошибкой,
+ * а не молча оставить старые (см. src/schedule-update.js).
+ */
+export function isPlausibleSchedule(schedule) {
+  if (!schedule || typeof schedule !== 'object') return false;
+  const { peakWindowsUtc: windows, peakWeekdaysUtc: weekdays } = schedule;
+  if (!Array.isArray(windows) || !windows.length) return false;
+  if (!Array.isArray(weekdays) || !weekdays.length) return false;
+  const windowsOk = windows.every(
+    (w) =>
+      Number.isInteger(w?.startMinute) &&
+      Number.isInteger(w?.endMinute) &&
+      w.startMinute >= 0 &&
+      w.startMinute < w.endMinute &&
+      w.endMinute <= 24 * 60,
+  );
+  const weekdaysOk = weekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+  return windowsOk && weekdaysOk;
+}
+
+/**
+ * Подставляет данные, разобранные со страницы тарифов.
+ * Неправдоподобное расписание игнорируется (остаются встроенные значения), цены
+ * применяются независимо — битое расписание не должно тянуть за собой цены.
+ * @returns {{scheduleApplied: boolean, pricesApplied: boolean}}
+ */
+export function applyRemoteData({ schedule, prices } = {}) {
+  let scheduleApplied = false;
+  if (schedule && isPlausibleSchedule(schedule)) {
+    activeSchedule = {
+      ...clone(BUNDLED_SCHEDULE),
+      ...clone(schedule),
+      discountPercent:
+        Number.isFinite(schedule.discountPercent) && schedule.discountPercent > 0
+          ? schedule.discountPercent
+          : BUNDLED_SCHEDULE.discountPercent,
+    };
+    dataOrigin = 'remote';
+    scheduleApplied = true;
+  }
+
+  let pricesApplied = false;
+  if (Array.isArray(prices) && prices.length) {
+    activePrices = clone(prices);
+    pricesApplied = true;
+  }
+
+  return { scheduleApplied, pricesApplied };
+}
+
+/** Возврат к встроенным данным (нужно тестам и при сбросе). */
+export function resetToBundled() {
+  activeSchedule = clone(BUNDLED_SCHEDULE);
+  activePrices = clone(BUNDLED_PRICES);
+  dataOrigin = 'bundled';
+}
+
 /** @returns {boolean} идёт ли сейчас пиковое окно. */
 export function isPeak(date = new Date()) {
-  if (!SCHEDULE.peakWeekdaysUtc.includes(date.getUTCDay())) return false;
+  const schedule = getSchedule();
+  if (!schedule.peakWeekdaysUtc.includes(date.getUTCDay())) return false;
   const minuteOfDay = date.getUTCHours() * 60 + date.getUTCMinutes();
-  return SCHEDULE.peakWindowsUtc.some(
+  return schedule.peakWindowsUtc.some(
     (w) => minuteOfDay >= w.startMinute && minuteOfDay < w.endMinute,
   );
 }
 
 /** Полное состояние тарифа в конкретный момент. */
 export function status(date = new Date()) {
+  const schedule = getSchedule();
   const peak = isPeak(date);
   return {
     peak,
     offPeak: !peak,
-    discountPercent: peak ? 0 : SCHEDULE.discountPercent,
-    priceMultiplier: peak ? 1 : 1 - SCHEDULE.discountPercent / 100,
+    discountPercent: peak ? 0 : schedule.discountPercent,
+    priceMultiplier: peak ? 1 : 1 - schedule.discountPercent / 100,
     label: peak ? 'ПИК' : 'ОФФ-ПИК',
   };
 }
 
 /** Пиковые окна (как Date) для UTC-суток, начинающихся с utcDayStartMs. */
 export function peakWindowDatesForUtcDay(utcDayStartMs) {
-  return SCHEDULE.peakWindowsUtc.map((w) => ({
+  return getSchedule().peakWindowsUtc.map((w) => ({
     start: new Date(utcDayStartMs + w.startMinute * MINUTE_MS),
     end: new Date(utcDayStartMs + w.endMinute * MINUTE_MS),
   }));

@@ -335,3 +335,46 @@ footer a {
   color: var(--accent);
   text-decoration: none;
 }
+
+.data-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.source {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.source[data-tone="remote"] {
+  color: var(--off);
+}
+
+.source[data-tone="error"] {
+  color: var(--peak);
+}
+
+button {
+  flex: 0 0 auto;
+  background: var(--card-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}

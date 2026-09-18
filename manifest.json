@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "DeepSeek Peak Hours",
-  "version": "1.1.0",
-  "description": "Пиковые и офф-пиковые (скидка 50%) часы DeepSeek API в вашем часовом поясе: цвет иконки, бейдж, обратный отсчёт и цены.",
-  "permissions": ["alarms"],
+  "version": "1.2.0",
+  "description": "Пиковые и офф-пиковые (скидка 50%) часы DeepSeek API в вашем часовом поясе: цвет иконки, бейдж, отсчёт и цены. Расписание раз в неделю обновляется со страницы тарифов.",
+  "permissions": ["alarms", "storage"],
+  "host_permissions": ["https://api-docs.deepseek.com/*"],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"

@@ -2,15 +2,19 @@
  * Service worker: держит иконку расширения в актуальном состоянии.
  * Зелёная иконка + бейдж OFF — офф-пик (скидка 50%), красная + PEAK — пик.
  *
+ * Про экономию ресурсов: service worker просыпается не по минутному таймеру, а
+ * только к моменту смены тарифа (2–4 раза в сутки) плюс недельная проверка
+ * актуальности тарифов. Раньше минутный alarm будил воркер 1440 раз в сутки.
+ *
  * Про надёжность: chrome.action.setIcon({path}) из service worker иногда падает
  * с "Failed to fetch" (гонка при старте воркера). Поэтому здесь три уровня:
  *   1) path → 2) повтор через 300 мс → 3) imageData, собранный из тех же PNG
- * через OffscreenCanvas. После успешного перехода режим закрепляется (sticky),
- * чтобы не дёргать заведомо сбойный путь каждый раз.
+ * через OffscreenCanvas. После успешного перехода режим закрепляется (sticky).
  * Бейдж и заголовок ставятся независимо от иконки — сбой иконки их не блокирует.
  */
 
 import { status, nextTransition } from './schedule.js';
+import { loadStoredPricing, refreshPricing } from './schedule-update.js';
 
 const ICON_SIZES = [16, 32, 48, 128];
 const ICON_PATHS = {
@@ -19,7 +23,14 @@ const ICON_PATHS = {
 };
 
 const BADGE_COLORS = { peak: '#EF4444', off: '#22C55E' };
-const ALARM_NAME = 'deepseek-peak-clock';
+/** Одноразовый alarm ровно на следующую смену тарифа. */
+const TRANSITION_ALARM = 'deepseek-peak-transition';
+/** Недельная проверка страницы тарифов. */
+const UPDATE_ALARM = 'deepseek-pricing-update';
+const UPDATE_PERIOD_MINUTES = 7 * 24 * 60;
+const UPDATE_DELAY_MINUTES = 60;
+/** Страховка, если смену тарифа вычислить не удалось. */
+const FALLBACK_WAKE_MINUTES = 60;
 
 /** Режим установки иконки: 'path' (лёгкий) или 'imageData' (обходит баг Chrome). */
 let iconMode = 'path';
@@ -32,6 +43,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function humanLeft(ms) {
   const totalMinutes = Math.max(0, Math.round(ms / 60000));
+  if (totalMinutes < 1) return 'меньше минуты';
   if (totalMinutes < 60) return `${totalMinutes} мин`;
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -104,16 +116,52 @@ async function applyBadge(state, title) {
   await chrome.action.setTitle({ title });
 }
 
-async function refreshAction() {
+/**
+ * Ставит одноразовый alarm на момент следующей смены тарифа (+1 с запаса).
+ * Так воркер просыпается только когда статус действительно меняется.
+ * @returns {ReturnType<typeof nextTransition>} момент смены
+ */
+function scheduleNextWake(now = new Date()) {
+  const next = nextTransition(now);
+  if (!next) {
+    chrome.alarms.create(TRANSITION_ALARM, {
+      delayInMinutes: FALLBACK_WAKE_MINUTES,
+      periodInMinutes: FALLBACK_WAKE_MINUTES,
+    });
+    return null;
+  }
+  chrome.alarms.create(TRANSITION_ALARM, { when: next.at.getTime() + 1000 });
+  return next;
+}
+
+/**
+ * Недельная проверка тарифов. Создаём только если такого alarm ещё нет:
+ * bootstrap выполняется на каждом пробуждении воркера, и пересоздание сбрасывало
+ * бы недельный цикл (alarm срабатывал бы через час после каждого пробуждения).
+ */
+async function ensureUpdateAlarm() {
+  const getAlarm = chrome.alarms.get?.bind(chrome.alarms);
+  if (getAlarm) {
+    const existing = await getAlarm(UPDATE_ALARM);
+    if (existing) return;
+  }
+  chrome.alarms.create(UPDATE_ALARM, {
+    delayInMinutes: UPDATE_DELAY_MINUTES,
+    periodInMinutes: UPDATE_PERIOD_MINUTES,
+  });
+}
+
+async function refreshAction({ reschedule = true } = {}) {
   const now = new Date();
   const peak = status(now).peak;
   const state = peak ? 'peak' : 'off';
   const next = nextTransition(now);
   const eta = next ? humanLeft(next.msLeft) : '';
+  const schedule = status(now);
 
   const title = peak
     ? `DeepSeek API: пик — полная цена${eta ? `, до скидки ${eta}` : ''}`
-    : `DeepSeek API: офф-пик — скидка 50%${eta ? `, до пика ${eta}` : ''}`;
+    : `DeepSeek API: офф-пик — скидка ${schedule.discountPercent}%${eta ? `, до пика ${eta}` : ''}`;
 
   // Бейдж и заголовок важны не меньше иконки, поэтому ставятся независимо.
   const results = await Promise.allSettled([applyBadge(state, title), applyIcon(state)]);
@@ -131,35 +179,58 @@ async function refreshAction() {
   } else {
     loggedFailures.clear();
   }
+
+  if (reschedule) scheduleNextWake(now);
 }
 
-function ensureAlarm() {
-  chrome.alarms.create(ALARM_NAME, { delayInMinutes: 0.5, periodInMinutes: 1 });
+/** Обновляет расписание (если пора) и, если данные изменились, иконку. */
+async function refreshPricingAndAction({ force = false } = {}) {
+  const result = await refreshPricing({ force });
+  if (result.status === 'updated') await refreshAction();
+  return result;
+}
+
+/** Запуск/перезапуск воркера: применяем сохранённые данные и планируем пробуждения. */
+async function bootstrap() {
+  await loadStoredPricing();
+  await refreshAction();
+  await ensureUpdateAlarm();
+  await refreshPricingAndAction();
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  ensureAlarm();
-  refreshAction();
+  bootstrap();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  ensureAlarm();
-  refreshAction();
+  bootstrap();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === ALARM_NAME) refreshAction();
+  if (alarm.name === TRANSITION_ALARM) {
+    refreshAction().catch((error) => console.error('[DeepSeek Peak Hours]', error));
+  } else if (alarm.name === UPDATE_ALARM) {
+    refreshPricingAndAction().catch((error) => console.error('[DeepSeek Peak Hours]', error));
+  }
 });
 
-// Сообщение из popup при открытии — чтобы цвет обновился мгновенно.
+// Сообщения из popup: обновить иконку и/или принудительно перечитать тарифы.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'refresh') {
     refreshAction().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message?.type === 'refresh-pricing') {
+    refreshPricingAndAction({ force: Boolean(message.force) })
+      .then(async (result) => {
+        await refreshAction();
+        sendResponse(result);
+      })
+      .catch((error) => sendResponse({ status: 'failed', reason: String(error?.message || error) }));
     return true;
   }
   return false;
 });
 
 // Старт service worker'а (в т.ч. после засыпания).
-ensureAlarm();
-refreshAction();
+bootstrap().catch((error) => console.error('[DeepSeek Peak Hours]', error));
