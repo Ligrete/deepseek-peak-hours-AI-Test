@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "DeepSeek Peak Hours",
+  "version": "1.1.0",
+  "description": "Пиковые и офф-пиковые (скидка 50%) часы DeepSeek API в вашем часовом поясе: цвет иконки, бейдж, обратный отсчёт и цены.",
+  "permissions": ["alarms"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "DeepSeek Peak Hours",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon-off-16.png",
+      "32": "icons/icon-off-32.png",
+      "48": "icons/icon-off-48.png",
+      "128": "icons/icon-off-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-off-16.png",
+    "32": "icons/icon-off-32.png",
+    "48": "icons/icon-off-48.png",
+    "128": "icons/icon-off-128.png"
+  }
+}

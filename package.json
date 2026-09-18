@@ -1,0 +1,11 @@
+{
+  "name": "deepseek-peak-hours",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome-расширение: пиковые/офф-пиковые часы DeepSeek API. package.json нужен только для запуска тестов и генератора иконок в Node.",
+  "scripts": {
+    "test": "TZ=Europe/Moscow node tools/check-schedule.mjs && node tools/check-icons.mjs && node tools/check-extension.mjs && node tools/check-icon-fallback.mjs && node tools/check-popup.mjs",
+    "icons": "node tools/make-icons.mjs"
+  }
+}

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>DeepSeek Peak Hours</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body data-status="off">
+    <header class="head">
+      <span class="logo" aria-hidden="true"></span>
+      <div class="head-text">
+        <h1>DeepSeek Peak Hours</h1>
+        <p>Цена API зависит от времени суток</p>
+      </div>
+    </header>
+
+    <section class="card status" id="status-card">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="status-text">
+        <strong id="status-title">…</strong>
+        <span id="status-note">…</span>
+      </div>
+    </section>
+
+    <section class="clocks">
+      <div>
+        <span class="label">Ваше время</span>
+        <strong id="local-clock">—</strong>
+      </div>
+      <div>
+        <span class="label">UTC</span>
+        <strong id="utc-clock">—</strong>
+      </div>
+    </section>
+
+    <section class="card countdown">
+      <span class="label" id="countdown-label">До смены тарифа</span>
+      <strong id="countdown-value">—</strong>
+      <span class="hint" id="countdown-hint"></span>
+    </section>
+
+    <section>
+      <h2>Сегодня по вашему времени</h2>
+      <div id="timeline" role="img" aria-label="Полоса часов суток"></div>
+      <div class="legend">
+        <span><i class="sw sw-off"></i>офф-пик, −50%</span>
+        <span><i class="sw sw-peak"></i>пик, полная цена</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Пиковые окна в вашем поясе</h2>
+      <ul class="week" id="week"></ul>
+      <p class="fine">Офф-пик действует всё остальное время: выходные целиком и будни до 01:00–04:00 / 06:00–10:00 UTC.</p>
+    </section>
+
+    <details>
+      <summary>Цены за 1M токенов, USD</summary>
+      <div id="prices"></div>
+    </details>
+
+    <footer>
+      <span id="tz-note"></span>
+      <a href="https://api-docs.deepseek.com/quick_start/pricing" target="_blank" rel="noreferrer">Тарифы DeepSeek ↗</a>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
